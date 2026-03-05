@@ -1,4 +1,3 @@
-const { hostname } = require('os');
 const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 3000;
@@ -101,7 +100,17 @@ wss.on('connection', (socket) => {
             }
 
             console.log(`📺 Room ${currentRoomId}: ${msg.type} at ${Number(nextTime).toFixed(2)}s`);
-            eventUpdate(currentRoomId, room, { type: 'sync-state', state: room.state });
+            eventUpdate(currentRoomId, room, { type: msg.type, state: room.state });
+        }
+
+        if (msg.type === 'ping') {
+            console.log(`🏓 Received ping from client in room ${currentRoomId}`);
+            socket.send(JSON.stringify({ type: 'pong' }));
+        }
+
+        if (msg.type === 'chatMessage') {
+            console.log(`💬 Received chat message in room ${currentRoomId}: ${msg.text}`);
+            broadcast(currentRoomId, msg, socket);
         }
     });
 
