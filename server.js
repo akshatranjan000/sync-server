@@ -91,7 +91,8 @@ wss.on('connection', (socket) => {
         if (msg.type === 'play' || 
             msg.type === 'pause' || 
             msg.type === 'seek' || 
-            msg.type === 'ratechange'
+            msg.type === 'ratechange' ||
+            msg.type === 'state-update'
         ) {
             const nextTime = msg.currentTime ?? msg.time ?? (room.state ? room.state.time ?? 0 : 0);
 
@@ -100,6 +101,7 @@ wss.on('connection', (socket) => {
                 time: nextTime,
                 isPlaying: msg.type === 'play' ? true : 
                            msg.type === 'pause' ? false : 
+                           typeof msg.isPlaying === 'boolean' ? msg.isPlaying :
                            room.state ? room.state.isPlaying ?? false : false,
                 playbackRate: msg.playbackRate ?? 
                 (room.state ? room.state.playbackRate ?? 1 : 1),
@@ -107,7 +109,10 @@ wss.on('connection', (socket) => {
             }
 
             console.log(`📺 Room ${currentRoomId}: ${msg.type} at ${Number(nextTime).toFixed(2)}s`);
-            eventUpdate(currentRoomId, room, { type: msg.type, state: room.state });
+
+            if (msg.type !== 'state-update') {
+                eventUpdate(currentRoomId, room, { type: msg.type, state: room.state });
+            }
         }
 
         if (msg.type === 'ping') {
