@@ -65,6 +65,13 @@ wss.on('connection', (socket) => {
             room.sockets.add(socket);
             console.log(`✅ Client joined room ${roomId} (${room.sockets.size} client(s) in room)`);
 
+            // Tell the joining client whether room state already exists.
+            socket.send(JSON.stringify({
+                type: 'join-ack',
+                roomId,
+                hasState: Boolean(room.state)
+            }));
+
             //Send current state to the newly joined client
             if (room.state) {
                 socket.send(JSON.stringify({ 
@@ -122,6 +129,11 @@ wss.on('connection', (socket) => {
                     client.send(responseMsg);
                 }
             }
+        }
+
+        if (msg.type === 'sync-state-ack') {
+            const acknowledgedAt = new Date(msg.ackAt || Date.now()).toISOString();
+            console.log(`✅ sync-state acknowledged in room ${currentRoomId} at ${acknowledgedAt} (time=${Number(msg.syncedTime || 0).toFixed(2)}s)`);
         }
     });
 
