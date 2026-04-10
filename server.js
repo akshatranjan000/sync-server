@@ -112,6 +112,17 @@ wss.on('connection', (socket) => {
             console.log(`💬 Received chat message in room ${currentRoomId}: ${msg.text}`);
             broadcast(currentRoomId, msg, socket);
         }
+
+        if (msg.type === 'videoReaction') {
+            console.log(`✨ Received video reaction in room ${currentRoomId}: ${msg.emoji}`);
+            // Send to everyone including the sender so they see their own reaction
+            const responseMsg = JSON.stringify(msg);
+            for (const client of room.sockets) {
+                if (client.readyState === WebSocket.OPEN) {
+                    client.send(responseMsg);
+                }
+            }
+        }
     });
 
     socket.on('close', () => {
