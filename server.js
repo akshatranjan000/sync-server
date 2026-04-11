@@ -47,7 +47,7 @@ wss.on('connection', (socket) => {
             console.error('❌ Failed to parse message:', raw);
             return;
         }
-        if (msg.type === 'join') {
+        if (msg.type === 'join' || msg.type === 'create-room') {
             const { roomId } = msg;
             currentRoomId = roomId;
 
@@ -55,7 +55,8 @@ wss.on('connection', (socket) => {
             if (!rooms.has(roomId)) {
                 rooms.set(roomId, {
                      sockets: new Set(),
-                     state: null
+                     state: null,
+                     sourceMetadata: null
                 });
                 console.log(`🏠 Created new room: ${roomId}`);
             }
@@ -63,20 +64,31 @@ wss.on('connection', (socket) => {
             //Add user(socket) to the room
             const room = rooms.get(roomId);
             room.sockets.add(socket);
+            if (msg.sourceMetadata && !room.sourceMetadata) {
+                room.sourceMetadata = {
+                    pageUrl: msg.sourceMetadata.pageUrl || null,
+                    pageTitle: msg.sourceMetadata.pageTitle || null,
+                    site: msg.sourceMetadata.site || null,
+                    adapterId: msg.sourceMetadata.adapterId || 'default',
+                    createdAt: msg.sourceMetadata.createdAt || Date.now()
+                };
+            }
             console.log(`✅ Client joined room ${roomId} (${room.sockets.size} client(s) in room)`);
 
             // Tell the joining client whether room state already exists.
             socket.send(JSON.stringify({
-                type: 'join-ack',
+                type: msg.type === 'create-room' ? 'create-room-ack' : 'join-ack',
                 roomId,
-                hasState: Boolean(room.state)
+                hasState: Boolean(room.state),
+                sourceMetadata: room.sourceMetadata
             }));
 
             //Send current state to the newly joined client
             if (room.state) {
                 socket.send(JSON.stringify({ 
                     type: 'sync-state', 
-                    state: room.state 
+                    state: room.state,
+                    sourceMetadata: room.sourceMetadata
                 }));
                 console.log(`🔄 Sent current state to new client in room ${roomId}`);
             }
@@ -108,10 +120,24 @@ wss.on('connection', (socket) => {
                 updatedAt: Date.now()
             }
 
+            if (msg.sourceMetadata && !room.sourceMetadata) {
+                room.sourceMetadata = {
+                    pageUrl: msg.sourceMetadata.pageUrl || null,
+                    pageTitle: msg.sourceMetadata.pageTitle || null,
+                    site: msg.sourceMetadata.site || null,
+                    adapterId: msg.sourceMetadata.adapterId || 'default',
+                    createdAt: msg.sourceMetadata.createdAt || Date.now()
+                };
+            }
+
             console.log(`📺 Room ${currentRoomId}: ${msg.type} at ${Number(nextTime).toFixed(2)}s`);
 
             if (msg.type !== 'state-update') {
-                eventUpdate(currentRoomId, room, { type: msg.type, state: room.state });
+                eventUpdate(currentRoomId, room, {
+                    type: msg.type,
+                    state: room.state,
+                    sourceMetadata: room.sourceMetadata
+                });
             }
         }
 
