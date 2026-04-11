@@ -23,14 +23,49 @@ function broadcast(roomId, data, except) {
 /*
 Sends event update message to all clients in the room.
 */
-function eventUpdate(roomId, room, data) {
+function eventUpdate(roomId, room, data, except) {
     const msg = JSON.stringify(data);
     for (const client of room.sockets) {
-        if (client.readyState === WebSocket.OPEN) {
+        if (client !== except && client.readyState === WebSocket.OPEN) {
             client.send(msg);
         }
     }
     console.log(`🔄 Sent ${data.type} update to room ${roomId}`);
+}
+
+function getRoomParticipantList(room) {
+    return Array.from(room.participants.values());
+}
+
+function sendToPeer(room, targetPeerId, data) {
+    if (!targetPeerId) return false;
+    const targetSocket = room.peerToSocket.get(targetPeerId);
+    if (!targetSocket || targetSocket.readyState !== WebSocket.OPEN) {
+        return false;
+    }
+    targetSocket.send(JSON.stringify(data));
+    return true;
+}
+
+function upsertParticipant(room, socket, participantInput) {
+    if (!participantInput || typeof participantInput !== 'object' || !participantInput.peerId) {
+        return null;
+    }
+
+    const participant = {
+        peerId: participantInput.peerId,
+        name: participantInput.name || 'User',
+        avatar: participantInput.avatar || 'bear.png',
+        callActive: Boolean(participantInput.callActive),
+        cameraOn: participantInput.cameraOn !== false,
+        micOn: participantInput.micOn !== false,
+        updatedAt: Date.now()
+    };
+
+    room.participants.set(participant.peerId, participant);
+    room.socketToPeerId.set(socket, participant.peerId);
+    room.peerToSocket.set(participant.peerId, socket);
+    return participant;
 }
 /*
 Handles new client connections to the WebSocket server.
@@ -56,7 +91,10 @@ wss.on('connection', (socket) => {
                 rooms.set(roomId, {
                      sockets: new Set(),
                      state: null,
-                     sourceMetadata: null
+                     sourceMetadata: null,
+                     participants: new Map(),
+                     socketToPeerId: new Map(),
+                     peerToSocket: new Map()
                 });
                 console.log(`🏠 Created new room: ${roomId}`);
             }
@@ -73,6 +111,8 @@ wss.on('connection', (socket) => {
                     createdAt: msg.sourceMetadata.createdAt || Date.now()
                 };
             }
+
+            const participant = upsertParticipant(room, socket, msg.participant);
             console.log(`✅ Client joined room ${roomId} (${room.sockets.size} client(s) in room)`);
 
             // Tell the joining client whether room state already exists.
@@ -80,8 +120,16 @@ wss.on('connection', (socket) => {
                 type: msg.type === 'create-room' ? 'create-room-ack' : 'join-ack',
                 roomId,
                 hasState: Boolean(room.state),
-                sourceMetadata: room.sourceMetadata
+                sourceMetadata: room.sourceMetadata,
+                participants: getRoomParticipantList(room)
             }));
+
+            if (participant) {
+                broadcast(roomId, {
+                    type: 'participant-joined',
+                    participant
+                }, socket);
+            }
 
             //Send current state to the newly joined client
             if (room.state) {
@@ -137,7 +185,7 @@ wss.on('connection', (socket) => {
                     type: msg.type,
                     state: room.state,
                     sourceMetadata: room.sourceMetadata
-                });
+                }, socket);
             }
         }
 
@@ -149,6 +197,45 @@ wss.on('connection', (socket) => {
         if (msg.type === 'chatMessage') {
             console.log(`💬 Received chat message in room ${currentRoomId}: ${msg.text}`);
             broadcast(currentRoomId, msg, socket);
+        }
+
+        if (msg.type === 'participant-update') {
+            const fallbackPeerId = room.socketToPeerId.get(socket);
+            const participant = upsertParticipant(room, socket, {
+                peerId: msg.peerId || fallbackPeerId,
+                name: msg.name,
+                avatar: msg.avatar,
+                callActive: msg.callActive,
+                cameraOn: msg.cameraOn,
+                micOn: msg.micOn
+            });
+
+            if (participant) {
+                broadcast(currentRoomId, {
+                    type: 'participant-updated',
+                    participant
+                }, socket);
+            }
+        }
+
+        if (msg.type === 'rtc-signal') {
+            const fromPeerId = msg.fromPeerId || room.socketToPeerId.get(socket) || null;
+            const forwarded = {
+                type: 'rtc-signal',
+                fromPeerId,
+                toPeerId: msg.toPeerId || null,
+                description: msg.description || null,
+                candidate: msg.candidate || null
+            };
+
+            if (msg.toPeerId) {
+                const delivered = sendToPeer(room, msg.toPeerId, forwarded);
+                if (!delivered) {
+                    console.log(`⚠️ Failed to deliver rtc-signal to ${msg.toPeerId} in room ${currentRoomId}`);
+                }
+            } else {
+                broadcast(currentRoomId, forwarded, socket);
+            }
         }
 
         if (msg.type === 'videoReaction') {
@@ -175,6 +262,16 @@ wss.on('connection', (socket) => {
         if (!room) return;
 
         room.sockets.delete(socket);
+        const peerId = room.socketToPeerId.get(socket);
+        if (peerId) {
+            room.socketToPeerId.delete(socket);
+            room.peerToSocket.delete(peerId);
+            room.participants.delete(peerId);
+            broadcast(currentRoomId, {
+                type: 'participant-left',
+                peerId
+            }, socket);
+        }
         console.log(`👋 Client left room ${currentRoomId} (${room.sockets.size} client(s) remaining)`);
 
         //If room is empty, delete it
