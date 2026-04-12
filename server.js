@@ -23,10 +23,10 @@ function broadcast(roomId, data, except) {
 /*
 Sends event update message to all clients in the room.
 */
-function eventUpdate(roomId, room, data) {
+function eventUpdate(roomId, room, data, except) {
     const msg = JSON.stringify(data);
     for (const client of room.sockets) {
-        if (client.readyState === WebSocket.OPEN) {
+        if (client !== except && client.readyState === WebSocket.OPEN) {
             client.send(msg);
         }
     }
@@ -111,7 +111,7 @@ wss.on('connection', (socket) => {
             console.log(`📺 Room ${currentRoomId}: ${msg.type} at ${Number(nextTime).toFixed(2)}s`);
 
             if (msg.type !== 'state-update') {
-                eventUpdate(currentRoomId, room, { type: msg.type, state: room.state });
+                eventUpdate(currentRoomId, room, { type: msg.type, state: room.state }, socket);
             }
         }
 
