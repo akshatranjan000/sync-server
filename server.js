@@ -1,4 +1,5 @@
 const WebSocket = require('ws');
+const crypto = require('crypto');
 
 const PORT = process.env.PORT || 3000;
 const wss = new WebSocket.Server({ port: PORT, host: '0.0.0.0' });
@@ -36,7 +37,8 @@ function eventUpdate(roomId, room, data, except) {
 Handles new client connections to the WebSocket server.
 */
 wss.on('connection', (socket) => {
-    console.log('🔌 New client connected');
+    socket.id = crypto.randomUUID();
+    console.log(`🔌 New client connected: ${socket.id}`);
     let currentRoomId = null;
 
     socket.on('message', (raw) => {
@@ -65,10 +67,17 @@ wss.on('connection', (socket) => {
             room.sockets.add(socket);
             console.log(`✅ Client joined room ${roomId} (${room.sockets.size} client(s) in room)`);
 
+            // Tell others this peer joined
+            broadcast(roomId, {
+                type: 'peer-joined',
+                socketId: socket.id
+            }, socket);
+
             // Tell the joining client whether room state already exists.
             socket.send(JSON.stringify({
                 type: 'join-ack',
                 roomId,
+                socketId: socket.id,
                 hasState: Boolean(room.state)
             }));
 
@@ -87,6 +96,22 @@ wss.on('connection', (socket) => {
         
         const room = rooms.get(currentRoomId);
         if (!room) return;
+
+        // Route WebRTC signaling messages to a specific peer
+        if (msg.type === 'webrtc-offer' || msg.type === 'webrtc-answer' || msg.type === 'webrtc-ice-candidate') {
+            const { targetId } = msg;
+            if (!targetId) return;
+            for (const client of room.sockets) {
+                if (client.id === targetId && client.readyState === WebSocket.OPEN) {
+                    client.send(JSON.stringify({
+                        ...msg,
+                        fromId: socket.id
+                    }));
+                    break;
+                }
+            }
+            return;
+        }
 
         if (msg.type === 'play' || 
             msg.type === 'pause' || 
@@ -149,7 +174,13 @@ wss.on('connection', (socket) => {
         if (!room) return;
 
         room.sockets.delete(socket);
-        console.log(`👋 Client left room ${currentRoomId} (${room.sockets.size} client(s) remaining)`);
+        console.log(`👋 Client ${socket.id} left room ${currentRoomId} (${room.sockets.size} client(s) remaining)`);
+
+        // Tell others this peer left
+        broadcast(currentRoomId, {
+            type: 'peer-left',
+            socketId: socket.id
+        }, socket);
 
         //If room is empty, delete it
         if (room.sockets.size === 0) {
